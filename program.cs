@@ -1,89 +1,68 @@
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.DependencyInjection;
+using System;
 using System.Collections.Generic;
-using System.ComponentModel.DataAnnotations;
-using System.Linq;
-using System.Threading.Tasks;
+using System.Data;
+using System.Data.SqlClient;
+using System.Security.Claims;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 
-var builder = WebApplication.CreateBuilder(args);
-builder.Services.AddControllers();
-var app = builder.Build();
-
-// Middleware for logging requests
-app.Use(async (context, next) =>
+namespace SecureApp
 {
-    Console.WriteLine($"Request: {context.Request.Method} {context.Request.Path}");
-    await next.Invoke();
-});
-
-app.MapControllers();
-app.Run();
-
-[ApiController]
-[Route("api/users")]
-public class UsersController : ControllerBase
-{
-    private static List<User> users = new List<User>();
-
-    [HttpGet]
-    public IActionResult GetUsers() => Ok(users);
-
-    [HttpGet("{id}")]
-    public IActionResult GetUser(int id)
+    public class UserController : Controller
     {
-        var user = users.FirstOrDefault(u => u.Id == id);
-        return user == null ? NotFound() : Ok(user);
+        private readonly string _connectionString = "YourSecureConnectionStringHere";
+
+        [HttpPost]
+        public IActionResult Login(string username, string password)
+        {
+            if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
+            {
+                return BadRequest("Invalid input");
+            }
+
+            using (SqlConnection conn = new SqlConnection(_connectionString))
+            {
+                string query = "SELECT Role FROM Users WHERE Username = @Username AND PasswordHash = HASHBYTES('SHA2_256', @Password)";
+                using (SqlCommand cmd = new SqlCommand(query, conn))
+                {
+                    cmd.Parameters.AddWithValue("@Username", username);
+                    cmd.Parameters.AddWithValue("@Password", password);
+                    conn.Open();
+                    var role = cmd.ExecuteScalar()?.ToString();
+
+                    if (role == null)
+                    {
+                        return Unauthorized("Invalid credentials");
+                    }
+
+                    var claims = new List<Claim> { new Claim(ClaimTypes.Name, username), new Claim(ClaimTypes.Role, role) };
+                    var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
+                    var principal = new ClaimsPrincipal(identity);
+                    HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal);
+                    
+                    return Ok("Login successful");
+                }
+            }
+        }
+
+        [Authorize(Roles = "Admin")]
+        [HttpGet]
+        public IActionResult SecureAdminEndpoint()
+        {
+            return Ok("Welcome, Admin!");
+        }
     }
 
-    [HttpPost]
-    public IActionResult CreateUser([FromBody] User user)
+    public class SecurityTests
     {
-        if (!ModelState.IsValid)
-            return BadRequest(ModelState);
-        
-        user.Id = users.Count + 1;
-        users.Add(user);
-        return CreatedAtAction(nameof(GetUser), new { id = user.Id }, user);
+        public void TestSQLInjectionPrevention()
+        {
+            string maliciousInput = "' OR '1'='1";
+            UserController controller = new UserController();
+            var result = controller.Login(maliciousInput, "password");
+            Console.WriteLine(result.ToString()); // Should return Unauthorized
+        }
     }
-
-    [HttpPut("{id}")]
-    public IActionResult UpdateUser(int id, [FromBody] User user)
-    {
-        var existingUser = users.FirstOrDefault(u => u.Id == id);
-        if (existingUser == null)
-            return NotFound();
-        
-        if (!ModelState.IsValid)
-            return BadRequest(ModelState);
-        
-        existingUser.Name = user.Name;
-        existingUser.Email = user.Email;
-        return NoContent();
-    }
-
-    [HttpDelete("{id}")]
-    public IActionResult DeleteUser(int id)
-    {
-        var user = users.FirstOrDefault(u => u.Id == id);
-        if (user == null)
-            return NotFound();
-        
-        users.Remove(user);
-        return NoContent();
-    }
-}
-
-public class User
-{
-    public int Id { get; set; }
-    
-    [Required]
-    [MinLength(2)]
-    public string Name { get; set; }
-    
-    [Required]
-    [EmailAddress]
-    public string Email { get; set; }
 }
