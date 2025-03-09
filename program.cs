@@ -12,7 +12,7 @@ namespace SecureApp
 {
     public class UserController : Controller
     {
-        private readonly string _connectionString = "YourSecureConnectionStringHere";
+        private readonly string _connectionString = "1234567890";
 
         [HttpPost]
         public IActionResult Login(string username, string password)
